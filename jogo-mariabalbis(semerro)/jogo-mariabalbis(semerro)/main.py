@@ -46,7 +46,7 @@ class Merch:
             case -50:
                 return pyxel.COLOR_RED
             case _:
-                return "Unknown Status"
+                return pyxel.COLOR_WHITE
 
 # Classe para as informações das naves
 @dataclass
@@ -57,6 +57,7 @@ class Ship:
     rotation_dir: int = 0 # -1=esquerda, 0=sem rotação, 1=direita
     acceleration: int = 0
     exploded:bool = False
+    explosao_timer:int = 0
     points:int = 0
     lives:int = 3
     
@@ -74,6 +75,11 @@ STAR_POSITION = { 'x': 150, 'y': 150 }
 STAR_SCALE = 3
 STAR_RADIUS = 8 * STAR_SCALE
 STAR_COLOR = pyxel.COLOR_PINK
+#Limites do mapa
+MAP_WIDTH = 300
+MAP_HEIGHT = 300
+#Frames de invulnerabilidade/explosão após uma colisão
+INVULNERABILIDADE = 60
 
 #Definições de pontuação para distribuição aleatória
 POINTS = [10,20,-10,40,-30,80,-50]
@@ -82,8 +88,12 @@ WEIGHT_BUDGET = 1000
 
 #Mercadorias que podem ser coletadas pelo jogador
 MERCHS_IN_PLAY = []
+#Quantidade máxima de mercadorias no mapa e intervalo (em frames) de reaparecimento
+MAX_MERCHS = 40
+RESPAWN_INTERVAL = 90
 
-auditoria = { 'dv':{},'np':{} }
+def calcula_distancia_quadrada(x1, y1, x2, y2):
+    return (x2 - x1) ** 2 + (y2 - y1) ** 2
 
 #################################
 ### Funções para o controle da movimentação das naves
@@ -107,18 +117,16 @@ def rotate_ship(ship):
         ship.rotation += ship.rotation_dir*ROTATION_SPEED
 
 def move_ship(ship):
-    #TO-DO: Implementar gravidade da estrela puxando a nave
     #Propulsores da nave
     # Vetor que determina a direção de movimento da nave
     direction_vec = { 'x': math.cos(ship.rotation), 'y': math.sin(ship.rotation) }
-    auditoria['dv']= direction_vec
-    
+
     dx = STAR_POSITION['x'] - ship.x
     dy = STAR_POSITION['y'] - ship.y
 
-    distancia = math.sqrt(dx**2 + dy**2)
+    distancia = calcula_distancia_quadrada(ship.x, ship.y, STAR_POSITION['x'], STAR_POSITION['y'])
 
-    G = 0.08
+    G = 15
 
     if distancia != 0:
         gravidade_x = (dx/distancia) * G
@@ -132,14 +140,14 @@ def move_ship(ship):
 
 def move_scraps():
 
-    G = 0.04
+    G = 6
 
     for scrap in MERCHS_IN_PLAY:
 
         dx = STAR_POSITION['x'] - scrap.x
         dy = STAR_POSITION['y'] - scrap.y
 
-        distancia = math.sqrt(dx**2 + dy**2)
+        distancia = calcula_distancia_quadrada(scrap.x, scrap.y, STAR_POSITION['x'], STAR_POSITION['y'])
 
         if distancia != 0:
             scrap.x += (dx/distancia) * G
@@ -167,37 +175,38 @@ def select_points():
         cursor += WEIGHTS[i]
         if (cursor >= rd):
             return (POINTS[i],WEIGHTS[i])
-    return -10
-    
+    return (POINTS[-1],WEIGHTS[-1])
+
+def cria_mercadoria():
+    p,w = select_points()
+    scrap = Merch(random.randint(0,MAP_WIDTH),random.randint(0,MAP_HEIGHT),p)
+    return scrap, w
+
 def spawn_scrap():
    budget = WEIGHT_BUDGET
    while budget > 0:
-       p,w = select_points()
-       # Cria a mercadoria em uma posição aleatória dentro do mapa (entre 0 e 300)
-       #TO-DO: criar lógica para evitar que seja criada muito próxima da estrela
-       #TO-DO: Criar lógica para espalhar melhor os pontos no mapa
-       scrap = Merch(random.randint(0,300),random.randint(0,300),p)
+       scrap,w = cria_mercadoria()
        MERCHS_IN_PLAY.append(scrap)
        budget -= w
+
+def respawn_scrap():
+    if len(MERCHS_IN_PLAY) < MAX_MERCHS and pyxel.frame_count % RESPAWN_INTERVAL == 0:
+        scrap,_ = cria_mercadoria()
+        MERCHS_IN_PLAY.append(scrap)
 
 ###########################
 #### Funções para verificação de colisões
 ###########################
 
 #Verifica colisões das mercadorias
+#RETORNA: Lista de Merchs pegos pela nave, lista de Merchs engolidos pela estrela
 def check_scrap_collision(ship):
-    #TO-DO: Verifica se a nave encostou nas cargas
-    #TO-DO: Verifica se as cargas encostaram na estrela
-    #RETORNA: Lista de Merchs pegos pela nave, lista de Merchs engolidos pela estrela
-
     remover = []
 
     for scrap in MERCHS_IN_PLAY:
-        dx = scrap.x - ship.x
-        dy = scrap.y - ship.y
-        distancia = math.sqrt(dx**2 + dy**2)
+        distancia = calcula_distancia_quadrada(ship.x, ship.y, scrap.x, scrap.y)
 
-        if distancia <= SHIP_RADIUS:
+        if distancia <= SHIP_RADIUS ** 2:
             ship.points += scrap.points
             remover.append(scrap)
 
@@ -207,41 +216,44 @@ def check_scrap_collision(ship):
     remover2 = []
 
     for scrap in MERCHS_IN_PLAY:
+        distancia = calcula_distancia_quadrada(scrap.x, scrap.y, STAR_POSITION['x'], STAR_POSITION['y'])
 
-        dx = STAR_POSITION['x'] - scrap.x
-        dy = STAR_POSITION['y'] - scrap.y
-
-        distancia = math.sqrt(dx**2 + dy**2)
-
-        if distancia <= STAR_RADIUS:
+        if distancia <= STAR_RADIUS ** 2:
             remover2.append(scrap)
 
     for scrap in remover2:
         MERCHS_IN_PLAY.remove(scrap)
-        
+
     return remover, remover2
-    
+
+def atinge_nave(ship):
+    ship.lives -= 1
+    ship.x = 50
+    ship.y = 50
+    ship.acceleration = 0
+    ship.exploded = True
+    ship.explosao_timer = INVULNERABILIDADE
+
+# Atualiza o estado de explosão/invulnerabilidade da nave
+def atualiza_explosao(ship):
+    if ship.exploded:
+        ship.explosao_timer -= 1
+        if ship.explosao_timer <= 0:
+            ship.exploded = False
+
 # Verifica colisões da nave
 def check_collisions(ship):
+    if ship.exploded:
+        return
 
-    dx = STAR_POSITION['x'] - ship.x
-    dy = STAR_POSITION['y'] - ship.y
+    distancia = calcula_distancia_quadrada(ship.x, ship.y, STAR_POSITION['x'], STAR_POSITION['y'])
 
-    distancia = math.sqrt(dx**2 + dy**2)
+    if distancia <= (STAR_RADIUS + SHIP_RADIUS) ** 2:
+        atinge_nave(ship)
+        return
 
-    if distancia <= STAR_RADIUS + SHIP_RADIUS:
-        ship.lives -= 1
-        ship.x = 50
-        ship.y = 50
-        ship.acceleration = 0
-        
-    if ship.x < 0 or ship.x > 300 or ship.y < 0 or ship.y > 300:
-        ship.lives -= 1
-        ship.x = 50
-        ship.y = 50
-        ship.acceleration = 0
-    
-    return
+    if ship.x < 0 or ship.x > MAP_WIDTH or ship.y < 0 or ship.y > MAP_HEIGHT:
+        atinge_nave(ship)
 
 # Desenha um coração simples (duas bolinhas em cima + um triângulo embaixo)
 def draw_heart(x, y, color):
@@ -271,14 +283,18 @@ def draw_legend(x, y):
 ######################
 class App:
     c_needle = Ship(50,50)
-    c_wedge = Ship(250,250)
 
     def __init__(self):
-        pyxel.init(300, 300)
+        pyxel.init(MAP_WIDTH, MAP_HEIGHT)
         pyxel.load("my_resource.pyxres")
         self.x = 0
         spawn_scrap()
         pyxel.run(self.update, self.draw)
+
+    def reinicia(self):
+        self.c_needle = Ship(50,50)
+        MERCHS_IN_PLAY.clear()
+        spawn_scrap()
         
     # Processa a entrada de teclado do usuário
     def processa_teclado(self):
@@ -301,10 +317,16 @@ class App:
     # 2. Aplica rotação na Nave
     # 3. Aplica o movimento da nave
     def update(self):
+        if self.c_needle.lives <= 0:
+            if pyxel.btnp(pyxel.KEY_R):
+                self.reinicia()
+            return
         self.processa_teclado()
         rotate_ship(self.c_needle)
         move_ship(self.c_needle)
         move_scraps()
+        respawn_scrap()
+        atualiza_explosao(self.c_needle)
         check_collisions(self.c_needle)
         check_scrap_collision(self.c_needle)
 
@@ -314,22 +336,22 @@ class App:
             pyxel.cls(0)
             pyxel.text(100, 150, "GAME OVER", pyxel.COLOR_RED)
             pyxel.text(100, 160, f"Pontos: {self.c_needle.points}", pyxel.COLOR_WHITE)
+            pyxel.text(100, 170, "Aperte R para reiniciar", pyxel.COLOR_WHITE)
             return
         pyxel.cls(0)
         needle = self.c_needle
-        wedge = self.c_wedge
         # Estrela no centro da tela
         pyxel.circ(STAR_POSITION['x'], STAR_POSITION['y'], STAR_RADIUS, STAR_COLOR)
-        # Nave do Jogador 1 (Needle)
-        pyxel.blt(needle.x, needle.y, 0, 8, 8, 16, 16, rotate=math.degrees(needle.rotation)+90, colkey=0)
+        # Nave do Jogador 1 (Needle) - pisca enquanto está invulnerável
+        if not needle.exploded or pyxel.frame_count % 4 < 2:
+            pyxel.blt(needle.x, needle.y, 0, 8, 8, 16, 16, rotate=math.degrees(needle.rotation)+90, colkey=0)
+        if needle.exploded:
+            raio = 4 + (INVULNERABILIDADE - needle.explosao_timer) // 4
+            pyxel.circb(needle.x + 8, needle.y + 8, raio, pyxel.COLOR_ORANGE)
         for scrap in MERCHS_IN_PLAY:
             pyxel.circ(scrap.x, scrap.y, 2, col=scrap.get_color())
-        #pyxel.text(48, 100, "Pyxel Code Maker", pyxel.rndi(1, 15))
         draw_lives(10, 5, needle.lives)
         pyxel.text(10, 16, f"Pontos: {needle.points}", pyxel.COLOR_WHITE)
         draw_legend(250, 5)
-        # Remover Texto Abaixo. Usado apenas para auxiliar no desenvolvimento
-        #pyxel.text(10, 25, f"DV: {auditoria['dv']}", pyxel.COLOR_WHITE)
-        #pyxel.text(10, 35, f"Need: x:{needle.x} y:{needle.y} r:{needle.rotation}", pyxel.COLOR_WHITE)
     
 App()
